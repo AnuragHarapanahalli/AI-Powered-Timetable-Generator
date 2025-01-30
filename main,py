@@ -1,0 +1,106 @@
+from ortools.sat.python import cp_model
+
+# Define Classes, Subjects, and Faculty
+classes = ["A", "B", "C", "D", "E"]
+subjects = {
+    "Math": {"type": "lecture", "faculty": "Prof. X"},
+    "Physics": {"type": "lecture", "faculty": "Prof. Y"},
+    "Chemistry": {"type": "lab", "faculty": "Prof. Z"},
+    "Biology": {"type": "lab", "faculty": "Prof. W"},
+    "English": {"type": "lecture", "faculty": "Prof. V"},
+    "CS": {"type": "lab", "faculty": "Prof. U"},
+    "History": {"type": "lecture", "faculty": "Prof. T"},
+    "Geography": {"type": "lecture", "faculty": "Prof. S"},
+    "Economics": {"type": "lecture", "faculty": "Prof. R"},
+    "Electronics": {"type": "lab", "faculty": "Prof. Q"},
+}
+
+DAYS = 5
+SLOTS_PER_DAY = 5
+subject_list = list(subjects.keys())
+subject_count = len(subject_list)
+
+model = cp_model.CpModel()
+
+# Decision Variables: timetable[class][day][slot] = subject_index
+timetable = {}
+for cls in classes:
+    timetable[cls] = {}
+    for day in range(DAYS):
+        timetable[cls][day] = {}
+        for slot in range(SLOTS_PER_DAY):
+            timetable[cls][day][slot] = model.NewIntVar(0, subject_count - 1, f"{cls}_d{day}_s{slot}")
+
+# **Penalty Variable**
+penalty = model.NewIntVar(0, 1000, "penalty")  # Arbitrary upper bound
+
+# 📌 **Constraint 1: Enforce Subject Variety**
+for cls in classes:
+    for day in range(DAYS):
+        occurrences = [model.NewBoolVar(f"{cls}_d{day}_sub{sub_index}") for sub_index in range(subject_count)]
+        
+        for sub_index in range(subject_count):
+            count_var = model.NewIntVar(0, SLOTS_PER_DAY, f"{cls}_d{day}_subcount_{sub_index}")
+            model.Add(count_var == sum(timetable[cls][day][slot] == sub_index for slot in range(SLOTS_PER_DAY)))
+            
+            # **Punish excessive repetition of subjects in one day**
+            model.Add(count_var <= 2).OnlyEnforceIf(occurrences[sub_index])
+            penalty_increase = model.NewIntVar(0, 100, f"penalty_repeat_{cls}_d{day}_sub{sub_index}")
+            model.Add(penalty_increase == (count_var - 2) * 10)
+            model.AddPenaltyTerm(penalty_increase)
+
+# 📌 **Constraint 2: Faculty Conflict Avoidance (Minimization)**
+faculty_schedule = {}
+for day in range(DAYS):
+    for slot in range(SLOTS_PER_DAY):
+        faculty_schedule[(day, slot)] = {}
+
+        for cls in classes:
+            for sub_index, (subject, details) in enumerate(subjects.items()):
+                faculty = details["faculty"]
+
+                if faculty not in faculty_schedule[(day, slot)]:
+                    faculty_schedule[(day, slot)][faculty] = model.NewBoolVar(f"{faculty}_d{day}_s{slot}")
+
+                model.Add(timetable[cls][day][slot] == sub_index).OnlyEnforceIf(faculty_schedule[(day, slot)][faculty])
+                model.Add(timetable[cls][day][slot] != sub_index).OnlyEnforceIf(faculty_schedule[(day, slot)][faculty].Not())
+
+        faculty_conflicts = model.NewIntVar(0, 10, f"faculty_conflict_d{day}_s{slot}")
+        model.Add(faculty_conflicts == sum(faculty_schedule[(day, slot)].values()) - 1)  # More than 1 means conflict
+        penalty += faculty_conflicts * 50  # Penalize each conflict heavily
+
+# 📌 **Constraint 3: Labs Take 2 Consecutive Slots**
+for cls in classes:
+    for day in range(DAYS):
+        for slot in range(SLOTS_PER_DAY - 1):
+            for sub_index, (subject, details) in enumerate(subjects.items()):
+                if details["type"] == "lab":
+                    is_lab = model.NewBoolVar(f"is_lab_{cls}_d{day}_s{slot}")
+                    model.Add(timetable[cls][day][slot] == sub_index).OnlyEnforceIf(is_lab)
+                    model.Add(timetable[cls][day][slot + 1] == sub_index).OnlyEnforceIf(is_lab)
+                    
+                    # **Penalize broken lab sessions**
+                    lab_penalty = model.NewIntVar(0, 50, f"broken_lab_penalty_{cls}_d{day}_s{slot}")
+                    model.Add(lab_penalty == 50).OnlyEnforceIf(is_lab.Not())  # If lab is split
+                    penalty += lab_penalty
+
+# **Objective Function: Minimize Penalty**
+model.Minimize(penalty)
+
+# Solve the model
+solver = cp_model.CpSolver()
+status = solver.Solve(model)
+
+# 📌 **Display the Output Timetable**
+if status == cp_model.FEASIBLE or status == cp_model.OPTIMAL:
+    for cls in classes:
+        print(f"\n📅 Timetable for Class {cls}:")
+        for day in range(DAYS):
+            print(f"  Day {day + 1}: ", end="")
+            for slot in range(SLOTS_PER_DAY):
+                subject = subject_list[solver.Value(timetable[cls][day][slot])]
+                print(f"{subject} ", end="| ")
+            print()
+    print(f"\n⚠️ Penalty Score: {solver.ObjectiveValue()}")
+else:
+    print("❌ No feasible timetable found.")
