@@ -24,7 +24,7 @@ This project generates optimized timetables for multiple classes while consideri
 ## 📥 Installation
 1. Clone the repository:
    ```sh
-   git clone https://github.com/yourusername/timetable-generator.git
+   git clone (https://github.com/AnuragHarapanahalli/AI-Powered-Timetable-Generator.git)
    cd timetable-generator
    ```
 2. Install dependencies:
